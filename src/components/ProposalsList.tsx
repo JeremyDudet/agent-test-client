@@ -8,24 +8,17 @@ interface ProposalsListProps {
   onReject: (proposal: Proposal) => void;
 }
 
-export function ProposalsList({
-  proposals,
-  onApprove,
-  onReject,
-}: ProposalsListProps) {
+export function ProposalsList({ proposals, onApprove, onReject }: ProposalsListProps) {
   return (
     <Stack>
-      <Text size="lg" fw={500}>Proposals:</Text>
+      <Text size="lg" fw={500}>
+        Proposals:
+      </Text>
       {proposals.map((proposal, index) => (
         <Stack key={index} gap="xs">
           <Text>{JSON.stringify(proposal, null, 2)}</Text>
           <div>
-            <Button
-              size="xs"
-              variant="outline"
-              color="green"
-              onClick={() => onApprove(proposal)}
-            >
+            <Button size="xs" variant="outline" color="green" onClick={() => onApprove(proposal)}>
               Approve
             </Button>
             <Button
