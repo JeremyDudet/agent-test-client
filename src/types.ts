@@ -4,5 +4,20 @@ export interface Proposal {
   description: string;
   amount: number;
   suggestedCategory: string;
-  confidence?: number;
+  confidence: number;
+  semanticContext?: {
+    temporalReference?: string;
+    relatedEntities?: string[];
+    confidence: number;
+  };
+}
+
+export interface SemanticUnit {
+  timestamp: number;
+  confidence: number;
+  context: {
+    complete: boolean;
+    requires_clarification: boolean;
+    related_units?: string[];
+  };
 }

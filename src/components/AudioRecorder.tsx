@@ -7,9 +7,22 @@ import { ProposalsList } from './ProposalsList';
 import { RecordingStatus } from './RecordingStatus';
 import { Proposal } from '../types';
 
+interface SemanticContext {
+  timestamp: number;
+  isComplete: boolean;
+  confidence: number;
+  temporalContext?: {
+    previousMentions: string[];
+    relatedExpenses: string[];
+    timeReference?: string;
+  };
+  learningContext?: {
+    userPatterns: string[];
+    commonCorrections: string[];
+  };
+}
+
 interface VADInstance {
-  connect: () => void;
-  disconnect: () => void;
   destroy: () => void;
 }
 
@@ -17,50 +30,60 @@ export function AudioRecorder() {
   const [isRecording, setIsRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  const semanticContextRef = useRef<SemanticContext>({
+    timestamp: 0,
+    isComplete: false,
+    confidence: 0,
+  });
   const audioChunksRef = useRef<ArrayBuffer[]>([]);
   const recorderRef = useRef<RecordRTC | null>(null);
+  const lastVoiceStateRef = useRef<boolean>(false);
   const vadRef = useRef<VADInstance | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const lastVoiceStateRef = useRef(false);
 
+  // Enhanced VAD configuration with semantic understanding
   const initializeVAD = async (stream: MediaStream) => {
+    const audioContext = new AudioContext();
+    const MIN_SEMANTIC_CONFIDENCE = 0.75;
+
+    return VAD(audioContext, stream, {
+      onVoiceStart: () => {
+        lastVoiceStateRef.current = true;
+        semanticContextRef.current = {
+          timestamp: Date.now(),
+          isComplete: false,
+          confidence: 0,
+        };
+        socket.emit('contextStart');
+      },
+      onVoiceStop: () => {
+        lastVoiceStateRef.current = false;
+        if (semanticContextRef.current.confidence >= MIN_SEMANTIC_CONFIDENCE) {
+          socket.emit('semanticUnitComplete', {
+            timestamp: semanticContextRef.current.timestamp,
+            confidence: semanticContextRef.current.confidence,
+          });
+        }
+      },
+      noiseCaptureDuration: 1000,
+      minNoiseLevel: 0.2,
+      maxNoiseLevel: 0.8,
+    });
+  };
+
+  // Enhanced audio processing with semantic understanding
+  const processAudioChunk = async (chunk: ArrayBuffer) => {
     try {
-      audioContextRef.current = new AudioContext();
+      // Emit chunk with semantic context
+      socket.emit('audioDataPartial', {
+        audio: chunk,
+        context: semanticContextRef.current,
+      });
 
-      let voiceStartTime: number | null = null;
-      const MIN_VOICE_DURATION = 100;
-
-      vadRef.current = VAD(audioContextRef.current, stream, {
-        onVoiceStart: () => {
-          voiceStartTime = Date.now();
-          console.log('[CLIENT] Potential voice detected');
-          lastVoiceStateRef.current = true;
-        },
-        onVoiceStop: () => {
-          if (voiceStartTime && Date.now() - voiceStartTime >= MIN_VOICE_DURATION) {
-            console.log('[CLIENT] Valid voice segment ended');
-            setTimeout(() => {
-              lastVoiceStateRef.current = false;
-            }, 750);
-          } else {
-            console.log('[CLIENT] Ignored short voice segment');
-          }
-          voiceStartTime = null;
-        },
-        noiseCaptureDuration: 1500,
-        minNoiseLevel: 0.15,
-        maxNoiseLevel: 0.75,
-        onUpdate: () => {
-          if (voiceStartTime && Date.now() - voiceStartTime >= MIN_VOICE_DURATION) {
-            lastVoiceStateRef.current = true;
-          }
-        },
-      }) as VADInstance;
-
-      vadRef.current.connect();
+      audioChunksRef.current.push(chunk);
     } catch (err) {
-      console.error('[CLIENT] VAD initialization error:', err);
-      throw err;
+      console.error('[CLIENT] Error processing semantic chunk:', err);
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -89,11 +112,8 @@ export function AudioRecorder() {
         ondataavailable: async (blob) => {
           try {
             const arrayBuffer = await blob.arrayBuffer();
-
             if (lastVoiceStateRef.current) {
-              console.log('[CLIENT] Voice detected in chunk, size:', arrayBuffer.byteLength);
-              audioChunksRef.current.push(arrayBuffer);
-              socket.emit('audioDataPartial', arrayBuffer);
+              await processAudioChunk(arrayBuffer);
             } else {
               console.log('[CLIENT] Silence detected, skipping chunk');
             }
