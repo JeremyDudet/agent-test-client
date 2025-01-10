@@ -39,7 +39,23 @@ socket.on(
   }
 );
 
-// Error handling
+// Add handler for ordered transcriptions
+socket.on(
+  'orderedTranscription',
+  (data: { transcription: string; sequenceId: number; isComplete: boolean }) => {
+    console.log('[SOCKET] Received ordered transcription:', data);
+  }
+);
+
+// Socket connection error handling
+socket.on('connect_error', (error: Error) => {
+  console.error('[CLIENT] Socket connection error:', error);
+});
+
+socket.on('disconnect', (reason: string) => {
+  console.error('[CLIENT] Socket disconnected:', reason);
+});
+
 socket.on('error', (error) => {
   console.error('[SOCKET] Socket error:', error);
 });
