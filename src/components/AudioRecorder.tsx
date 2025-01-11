@@ -1,3 +1,4 @@
+// AudioRecorder.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import RecordRTC from 'recordrtc';
 import VAD from 'voice-activity-detection';
@@ -11,6 +12,7 @@ import type {
   QueuedAudioChunk,
   TranscriptionResponse,
   AudioChunkMetadata,
+  ExtendedVADOptions
 } from '../types';
 
 interface VADInstance {
@@ -35,14 +37,155 @@ export function AudioRecorder() {
   const sequenceCounterRef = useRef<number>(0);
   const pendingTranscriptionsRef = useRef<Map<number, AudioChunkMetadata>>(new Map());
   const nextExpectedSequenceRef = useRef<number>(0);
+  const voiceStartTimeRef = useRef<number | null>(null);
   const [transcriptions, setTranscriptions] = useState<string[]>([]);
 
   const BUFFER_DURATION = 1000; // 1 second buffer
   const PRE_RECORDING_BUFFER: Float32Array[] = [];
 
+// Initialize Voice Activity Detection (VAD) with the given audio stream
+const initializeVAD = async (stream: MediaStream) => {
+  const audioContext = new AudioContext();
+  audioContextRef.current = audioContext;
+
+  // Add error handling for AudioContext state
+  if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+  }
+
+  // Set up audio processing pipeline
+  // Create audio source from input stream
+  const source = audioContext.createMediaStreamSource(stream);
+
+  // Load custom audio processor worklet for handling raw audio data
+  await audioContext.audioWorklet.addModule('/audio-processor.js');
+
+  // Create processor node instance
+  const processor = new AudioWorkletNode(audioContext, 'audio-processor');
+
+  // Handle processed audio data from worklet
+  // Maintains a circular buffer of recent audio data
+  processor.port.onmessage = (e) => {
+      const inputData = e.data;
+      // Add new audio data to pre-recording buffer
+      PRE_RECORDING_BUFFER.push(new Float32Array(inputData));
+      // Remove oldest data if buffer exceeds size limit
+      if (PRE_RECORDING_BUFFER.length > BUFFER_DURATION / (4096 / audioContext.sampleRate)) {
+          PRE_RECORDING_BUFFER.shift();
+      }
+  };
+
+  // Connect audio source to processor
+  source.connect(processor);
+
+  const vadOptions: ExtendedVADOptions = {
+      onVoiceStart: () => {
+        setIsVoiceActive(true);
+        console.log('[VAD] Voice started');
+
+        // Record the timestamp
+        voiceStartTimeRef.current = Date.now();
+      
+        // Delay the recorder start slightly
+        setTimeout(() => {
+          if (isVoiceActive && recorderRef.current) {
+            recorderRef.current.startRecording();
+          }
+        }, 300);
+      },
+
+      onVoiceStop: async () => {
+        setIsVoiceActive(false);
+        console.log('[VAD] Voice stopped');
+      
+        // Optional short delay if you need to buffer any trailing audio
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      
+        if (recorderRef.current) {
+          try {
+            const voiceEndTime = Date.now();
+            const duration = voiceStartTimeRef.current
+              ? voiceEndTime - voiceStartTimeRef.current
+              : 0;
+      
+            // 1 second threshold
+            if (duration < 1000) {
+              console.log('[VAD] Chunk < 1 second. Discarding...');
+              recorderRef.current.stopRecording(() => {
+                // Clean up any internal references,
+                // but DO NOT push chunk to queue
+                recorderRef.current?.reset();
+              });
+              return; // Skip queue push
+            }
+      
+            // Otherwise, get the blob and push it to the queue
+            const blob = await new Promise<Blob>((resolve) => {
+              recorderRef.current?.stopRecording(() => {
+                const blob = recorderRef.current?.getBlob();
+                if (blob) {
+                  resolve(blob);
+                }
+              });
+            });
+      
+            // Proceed as usual
+            const audioBuffer = await blob.arrayBuffer();
+            const currentSequence = sequenceCounterRef.current++;
+      
+            console.log('[VAD] Logging valid audio chunk');
+      
+            audioQueueRef.current.push({
+              audio: audioBuffer,
+              context: semanticContextRef.current,
+              timestamp: Date.now(),
+              sequenceId: currentSequence,
+            });
+      
+            processQueue();
+            recorderRef.current?.reset();
+          } catch (err) {
+            console.error('[VAD] Error processing voice segment:', err);
+            setError(err instanceof Error ? err.message : String(err));
+          }
+        }
+      },
+      
+
+      onUpdate: (amplitude: number) => {
+          // if recording is active, log amplitude
+          if (isVoiceActive) {
+            console.log('[VAD] Amplitude:', amplitude);
+          }
+      },
+
+      // VAD configuration parameters
+      bufferLen: 1024,
+      avgNoiseMultiplier: 1.5,
+      minNoiseLevel: 0.5,           // Reduced sensitivity
+      maxNoiseLevel: 0.7,           // Increased range
+      minCaptureFreq: 85,           // Voice frequency range
+      maxCaptureFreq: 255,
+      noiseCaptureDuration: 2000,   // Longer noise analysis
+      minSpeechDuration: 750,       // Minimum 500ms of speech
+      maxSpeechDuration: 15000,     // Maximum 15s per segment
+      silenceDuration: 1000,         // Shorter silence detection
+      smoothingTimeConstant: 0.2,  // More smoothing
+      audioBuffering: {
+          enabled: true,
+          duration: 500
+      }
+  };
+
+
+  // Initialize Voice Activity Detection with configuration
+  vadRef.current = await VAD(audioContext, stream, vadOptions);
+  console.log('[VAD] Voice Activity Detection initialized with options:', vadOptions);
+};
+
+
   // Process audio chunks from the queue and send them to the server for transcription
   const processQueue = async () => {
-    console.log('[QUEUE] Starting queue processing');
 
     // Skip if already processing or queue is empty
     if (isProcessing || audioQueueRef.current.length === 0) {
@@ -57,7 +200,7 @@ export function AudioRecorder() {
 
     // Set processing flag to prevent concurrent processing
     setIsProcessing(true);
-    console.log('[QUEUE] Set processing flag to true');
+    console.log('[QUEUE] Starting queue processing');
 
     // Process chunks while there are items in the queue
     while (audioQueueRef.current.length > 0) {
@@ -82,6 +225,7 @@ export function AudioRecorder() {
               sequenceId: chunk.sequenceId,
               timestamp: chunk.timestamp,
             },
+            console.log('[QUEUE] Emitted audioDataPartial'),
             (response: TranscriptionResponse) => {
               // Clear timeout since we got a response
               clearTimeout(timeout);
@@ -160,137 +304,13 @@ export function AudioRecorder() {
     }
   };
 
-  // Initialize Voice Activity Detection (VAD) with the given audio stream
-  // This sets up audio processing and voice detection logic
-  const initializeVAD = async (stream: MediaStream) => {
-    // Create new audio context to process the stream
-    const audioContext = new AudioContext();
-    audioContextRef.current = audioContext;
-
-    // Set up audio processing pipeline
-    // Create audio source from input stream
-    const source = audioContext.createMediaStreamSource(stream);
-
-    // Load custom audio processor worklet for handling raw audio data
-    await audioContext.audioWorklet.addModule('/audio-processor.js');
-
-    // Create processor node instance
-    const processor = new AudioWorkletNode(audioContext, 'audio-processor');
-
-    // Handle processed audio data from worklet
-    // Maintains a circular buffer of recent audio data
-    processor.port.onmessage = (e) => {
-      const inputData = e.data;
-      // Add new audio data to pre-recording buffer
-      PRE_RECORDING_BUFFER.push(new Float32Array(inputData));
-      // Remove oldest data if buffer exceeds size limit
-      if (PRE_RECORDING_BUFFER.length > BUFFER_DURATION / (4096 / audioContext.sampleRate)) {
-        PRE_RECORDING_BUFFER.shift();
-      }
-    };
-
-    // Connect audio source to processor
-    source.connect(processor);
-
-    // Initialize Voice Activity Detection with configuration
-    vadRef.current = await VAD(audioContext, stream, {
-      // Called when voice activity starts
-      onVoiceStart: () => {
-        // Prevent duplicate starts
-        if (isVoiceActive) {
-          console.log('[VAD] Ignoring voice start - already active');
-          return;
-        }
-        setIsVoiceActive(true);
-
-        // Log detection events
-        console.log('[VAD] Voice activity detected - Starting recording');
-
-        // Initialize semantic context for this voice segment
-        semanticContextRef.current = {
-          timestamp: Date.now(),
-          isComplete: false,
-          confidence: 0,
-        };
-
-        // Start recording if recorder is ready
-        if (recorderRef.current) {
-          console.log('[RECORDER] Starting recording');
-          recorderRef.current.startRecording();
-        } else {
-          console.warn('[RECORDER] Recorder not ready when voice activity started');
-        }
-      },
-
-      // Called when voice activity ends
-      onVoiceStop: async () => {
-        setIsVoiceActive(false);
-
-        // Add small delay to capture trailing audio
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        console.log('[CLIENT] Voice activity stopped');
-
-        // Process recorded audio if available
-        if (recorderRef.current) {
-          try {
-            console.log('[RECORDER] Stopping recording and getting blob');
-            // Get recorded audio blob
-            const blob = await new Promise<Blob>((resolve) => {
-              recorderRef.current?.stopRecording(() => {
-                const blob = recorderRef.current?.getBlob();
-                if (blob) {
-                  console.log('[RECORDER] Got audio blob, size:', blob.size);
-                  resolve(blob);
-                }
-              });
-            });
-
-            // Convert blob to buffer and prepare for queue
-            console.log('[RECORDER] Converting blob to buffer');
-            const audioBuffer = await blob.arrayBuffer();
-            const currentSequence = sequenceCounterRef.current++;
-            console.log('[QUEUE] Preparing chunk with sequence ID:', currentSequence);
-
-            // Add to processing queue with metadata
-            audioQueueRef.current.push({
-              audio: audioBuffer,
-              context: semanticContextRef.current,
-              timestamp: Date.now(),
-              sequenceId: currentSequence,
-            });
-            console.log('[QUEUE] Added chunk to queue, size:', audioQueueRef.current.length);
-
-            // Trigger queue processing
-            console.log('[QUEUE] Triggering queue processing');
-            processQueue();
-            // Reset recorder for next segment
-            console.log('[RECORDER] Resetting recorder');
-            recorderRef.current?.reset();
-          } catch (err) {
-            console.error('[CLIENT] Error processing voice segment:', err);
-            setError(err instanceof Error ? err.message : String(err));
-          }
-        } else {
-          console.warn('[RECORDER] No recorder available when voice activity ended');
-        }
-      },
-
-      // VAD configuration parameters
-      minNoiseLevel: 0.2, // Minimum audio level to consider as noise
-      maxNoiseLevel: 0.7, // Maximum audio level to consider as noise
-      silenceTimeout: 2000, // Time of silence before stopping (ms)
-      noiseCaptureDuration: 750, // Duration to analyze noise levels (ms)
-      minVoiceDuration: 500, // Minimum duration to consider as voice (ms)
-    });
-    console.log('[VAD] Voice Activity Detection initialized successfully');
-  };
+  
 
   // Function to start audio recording with voice activity detection
   const startListening = async () => {
     // Reset the sequence counter for new recording session
     sequenceCounterRef.current = 0;
     console.log('[CLIENT] Start Listening... invoked');
-    console.log('[CLIENT] Initial sequence counter:', sequenceCounterRef.current);
     try {
       // Request access to user's microphone with specific audio constraints
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -299,16 +319,14 @@ export function AudioRecorder() {
           sampleRate: 48000, // High quality sample rate
           echoCancellation: true, // Reduce echo
           noiseSuppression: true, // Reduce background noise
+          autoGainControl: true, // Adjust microphone gain
         },
       });
 
       // Initialize Voice Activity Detection with the audio stream
-      console.log('[CLIENT] Initializing VAD...');
       await initializeVAD(stream);
-      console.log('[CLIENT] VAD initialization complete');
 
       // Configure and create new RecordRTC instance for audio recording
-      console.log('[CLIENT] Configuring RecordRTC...');
       recorderRef.current = new RecordRTC(stream, {
         type: 'audio',
         mimeType: 'audio/wav', // WAV format for high quality
@@ -317,7 +335,6 @@ export function AudioRecorder() {
         desiredSampRate: 48000, // Match input sample rate
         disableLogs: false, // Keep logs enabled for debugging
       });
-      console.log('[CLIENT] RecordRTC instance created');
 
       // Verify socket connection before proceeding
       if (!socket.connected) {
@@ -328,27 +345,37 @@ export function AudioRecorder() {
       setIsListening(true);
       setProposals([]); // Clear any existing proposals
       setError(null); // Clear any previous errors
-      console.log('[CLIENT] Recording ready');
     } catch (err) {
       // Handle and log any errors during setup
-      console.error('[CLIENT] Start Recording error:', err);
-      console.error('[CLIENT] Error details:', {
-        name: err instanceof Error ? err.name : 'Unknown',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : 'No stack trace',
-      });
       setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   const stopListening = () => {
     console.log('[CLIENT] STOP Listening invoked');
+    
+    // Immediately update UI state
+    setIsListening(false);
+    setIsVoiceActive(false);
+    
+    // First, destroy VAD instance to stop amplitude logging
+    if (vadRef.current) {
+      console.log('[CLEANUP] Destroying VAD instance');
+      vadRef.current.destroy();
+      vadRef.current = null;
+    }
+
+    // Then stop the recorder if it exists
     if (recorderRef.current) {
       recorderRef.current.stopRecording(() => {
         socket.emit('audioComplete');
-        setIsListening(false);
         cleanupAudioResources();
+        console.log('[CLEANUP] Audio resources cleaned up');
       });
+    } else {
+      // If no recorder exists, still cleanup
+      cleanupAudioResources();
+      console.log('[CLEANUP] Audio resources cleaned up');
     }
   };
 
@@ -370,8 +397,7 @@ export function AudioRecorder() {
         audioContextRef.current = null;
       }
 
-      console.log('[CLEANUP] Clearing pre-recording buffer and audio queue');
-      PRE_RECORDING_BUFFER.length = 0;
+      console.log('[CLEANUP] Clearing audio queue');
       audioQueueRef.current = [];
 
       if (recorderRef.current) {
@@ -395,11 +421,6 @@ export function AudioRecorder() {
       console.log('[CLEANUP] Audio resource cleanup completed successfully');
     } catch (err) {
       console.error('[CLEANUP] Error cleaning up audio resources:', err);
-      console.error('[CLEANUP] Error details:', {
-        name: err instanceof Error ? err.name : 'Unknown',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : 'No stack trace',
-      });
     }
   };
 
@@ -422,6 +443,7 @@ export function AudioRecorder() {
       socket.off('transcription', handleTranscription);
     };
   }, []);
+
 
   useEffect(() => {
     console.log('[CLIENT] Setting up socket listeners');
@@ -497,7 +519,7 @@ export function AudioRecorder() {
 
   return (
     <Stack gap="md" p="md">
-      <ListeningStatus isListening={isListening} />
+      <ListeningStatus isListening={isListening} isRecording={isVoiceActive} />
       <Button
         color={isListening ? 'red' : 'blue'}
         onClick={isListening ? stopListening : startListening}

@@ -1,5 +1,5 @@
-// Example of how you might structure your proposals.
-// Adjust to match the shape of the data returned by your backend.
+import { VoiceActivityDetectionOptions } from 'voice-activity-detection';
+
 export interface Proposal {
   description: string;
   amount: number;
@@ -67,4 +67,34 @@ export interface AudioChunkMetadata {
   timestamp: number;
   isProcessed: boolean;
   transcription?: string;
+}
+
+export interface ExtendedVADOptions extends VoiceActivityDetectionOptions {
+  onUpdate?: (amplitude: number) => void;
+  onSilence?: (duration: number) => void;
+  minSpeechDuration?: number;
+  maxSpeechDuration?: number;
+  silenceDuration?: number;
+  audioBuffering?: {
+    enabled: boolean;
+    duration: number;
+  };
+}
+
+// Re-export the VAD instance type
+export interface VADInstance {
+  destroy: () => void;
+}
+
+export interface VADMetrics {
+  cycleId: number;
+  startTime: number;
+  endTime: number | null;
+  duration: number | null;
+  audioChunks: number;
+  averageAmplitude: number;
+  totalAmplitudeReadings: number;
+  sumAmplitude: number;
+  silenceDuration: number;
+  voiceActivityRatio: number;
 }
