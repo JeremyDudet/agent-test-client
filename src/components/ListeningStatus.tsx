@@ -1,20 +1,26 @@
 import React from 'react';
-import { Text, Group, Badge } from '@mantine/core';
+import { Group, Badge } from '@mantine/core';
 
 interface ListeningStatusProps {
   isListening: boolean;
   isRecording: boolean;
+  isInitializing?: boolean;
 }
 
-export function ListeningStatus({ isListening, isRecording }: ListeningStatusProps) {
+export function ListeningStatus({
+  isListening,
+  isRecording,
+  isInitializing,
+}: ListeningStatusProps) {
   return (
     <Group>
       <Badge color={isListening ? 'blue' : 'gray'}>
         {isListening ? 'Listening' : 'Not Listening'}
       </Badge>
-      {isListening && (
+      {isInitializing && <Badge color="yellow">Initializing...</Badge>}
+      {isListening && !isInitializing && (
         <Badge color={isRecording ? 'red' : 'blue'} variant={isRecording ? 'filled' : 'light'}>
-          {isRecording ? 'Recording' : 'Waiting for voice'}
+          {isRecording ? 'Recording' : 'Ready for voice'}
         </Badge>
       )}
     </Group>
