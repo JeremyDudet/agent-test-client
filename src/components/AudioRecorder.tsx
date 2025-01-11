@@ -125,7 +125,7 @@ export function AudioRecorder() {
           const voiceEndTime = Date.now();
           const duration = voiceStartTimeRef.current ? voiceEndTime - voiceStartTimeRef.current : 0;
 
-          if (duration < 300) {
+          if (duration < 150) {
             console.log('[VAD] Chunk < 1/3 second. Discarding...');
             await new Promise<void>((resolve) => {
               recorderRef.current?.stopRecording(() => {
@@ -191,7 +191,7 @@ export function AudioRecorder() {
       // VAD configuration parameters
       bufferLen: 1024,
       avgNoiseMultiplier: 1.5,
-      minNoiseLevel: 0.5, // Reduced sensitivity
+      minNoiseLevel: 0.4, // Reduced sensitivity
       maxNoiseLevel: 0.7, // Increased range
       minCaptureFreq: 85, // Voice frequency range
       maxCaptureFreq: 255,
