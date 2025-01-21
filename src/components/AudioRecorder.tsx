@@ -249,7 +249,7 @@ export function AudioRecorder() {
 
           // Send audio chunk to server via socket
           socket.emit(
-            'audioDataPartial',
+            'audioData',
             {
               audio: chunk.audio,
               context: chunk.context,
@@ -464,6 +464,11 @@ export function AudioRecorder() {
   };
 
   useEffect(() => {
+    // This function handles incoming transcription responses from the server
+    // When a successful transcription arrives:
+    // 1. Stores it in pendingTranscriptionsRef with metadata like timestamp and sequence ID
+    // 2. Marks it as processed
+    // 3. Calls processOrderedTranscriptions() to handle ordered processing of transcriptions
     const handleTranscription = (response: TranscriptionResponse) => {
       if (response.success && response.transcription) {
         pendingTranscriptionsRef.current.set(response.sequenceId, {
@@ -538,11 +543,11 @@ export function AudioRecorder() {
       setError(error.message);
     };
 
-    socket.on('proposals', handleProposals);
+    socket.on('proposalsUpdated', handleProposals);
     socket.on('error', handleError);
 
     return () => {
-      socket.off('proposals', handleProposals);
+      socket.off('proposalsUpdated', handleProposals);
       socket.off('error', handleError);
     };
   }, []);
