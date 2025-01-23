@@ -98,3 +98,46 @@ export interface VADMetrics {
   silenceDuration: number;
   voiceActivityRatio: number;
 }
+
+export interface Message {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export interface TimeContext {
+  now: Date;
+  formattedNow: string;
+  timeZone: string;
+}
+
+export interface ExpenseCategory {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface MessageWindow {
+  processedMessages: Message[];
+  newMessages: Message[];
+  windowSize: number;
+}
+
+export interface AgentState {
+  isProcessing: boolean;
+  messageWindow: MessageWindow;
+  existingProposals: ExpenseProposal[];
+  userExpenseCategories: ExpenseCategory[];
+  timeContext: TimeContext;
+}
+
+export interface ExpenseProposal {
+  id: string;
+  status: 'draft' | 'pending_review' | 'confirmed' | 'rejected';
+  action: string;
+  item: string;
+  amount: number;
+  date: string;
+  category: string;
+  originalText: string;
+  created_at: string;
+}

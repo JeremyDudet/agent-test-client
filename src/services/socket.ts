@@ -1,5 +1,6 @@
 // socket.ts
 import { io } from 'socket.io-client';
+import { AgentState } from '../types';
 
 const BACKEND_URL = 'http://localhost:3000';
 
@@ -61,4 +62,25 @@ socket.on('disconnect', (reason: string) => {
 
 socket.on('error', (error) => {
   console.error('[SOCKET] Socket error:', error);
+});
+
+// State change handler
+socket.on('stateChanged', (state: AgentState) => {
+  console.log('[SOCKET] Agent state updated:', {
+    isProcessing: state.isProcessing,
+    messageCount: {
+      processed: state.messageWindow.processedMessages.length,
+      new: state.messageWindow.newMessages.length,
+    },
+    proposalsCount: state.existingProposals.length,
+    categories: state.userExpenseCategories.map((cat) => cat.name),
+    time: state.timeContext.formattedNow,
+  });
+
+  // You can emit a custom event or use a state management solution here
+  // For example, using a custom event:
+  const stateChangeEvent = new CustomEvent('agentStateChanged', {
+    detail: state,
+  });
+  window.dispatchEvent(stateChangeEvent);
 });
