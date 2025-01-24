@@ -8,16 +8,24 @@ import { ProposalsList } from './ProposalsList';
 import { ListeningStatus } from './ListeningStatus';
 import { mergePreRecordingBufferWithRecordedAudio } from '../services/audioMerging';
 import type {
-  Proposal,
   SemanticContext,
   QueuedAudioChunk,
   TranscriptionResponse,
   AudioChunkMetadata,
   ExtendedVADOptions,
+  ExpenseProposal,
 } from '../types';
 
 interface VADInstance {
   destroy: () => void;
+}
+
+interface ProposalsEventPayload {
+  proposals: ExpenseProposal[];
+  context: {
+    transcript: string;
+    timestamp: number;
+  };
 }
 
 export function AudioRecorder() {
@@ -27,7 +35,7 @@ export function AudioRecorder() {
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transcriptions, setTranscriptions] = useState<string[]>([]);
-  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [proposals, setProposals] = useState<ExpenseProposal[]>([]);
 
   const semanticContextRef = useRef<SemanticContext>({
     timestamp: 0,
@@ -491,72 +499,27 @@ export function AudioRecorder() {
   useEffect(() => {
     console.log('[CLIENT] Setting up socket listeners');
 
-    const handleProposals = (data: { proposals }) => {
-      console.log('[CLIENT] Received proposals:', data);
-
-      if (!data.proposals) return;
-
-      setProposals((prevProposals) => {
-        try {
-          let parsedData = data.proposals;
-
-          if (typeof data.proposals === 'string') {
-            if (data.proposals.trim() === 'No proposals.') {
-              return prevProposals;
-            }
-            const jsonString = data.proposals.split('\n')[0];
-            parsedData = JSON.parse(jsonString);
-          }
-
-          if (!parsedData || parsedData === 'No proposals') {
-            return prevProposals;
-          }
-
-          const proposalsArray = Object.values(parsedData).filter(
-            (p): p is Proposal =>
-              Boolean(p) &&
-              typeof p === 'object' &&
-              p !== null &&
-              'description' in p &&
-              'amount' in p &&
-              'suggestedCategory' in p
-          );
-
-          const newProposals = proposalsArray.filter(
-            (p) =>
-              !prevProposals.some(
-                (existing) => existing.description === p.description && existing.amount === p.amount
-              )
-          );
-
-          console.log('[CLIENT] Adding new proposals:', newProposals);
-          return [...prevProposals, ...newProposals];
-        } catch (err) {
-          console.error('[CLIENT] Error parsing proposals:', err);
-          return prevProposals;
-        }
-      });
+    const handleProposals = (data: ProposalsEventPayload) => {
+      console.log('Received proposals from server:', data);
+      // You can then update your state, for example:
+      setProposals(data.proposals);
+      // Or handle the context data (transcript, timestamp, etc.) in other ways
     };
 
-    const handleError = (error: { message: string }) => {
-      console.error('[CLIENT] Socket error:', error);
-      setError(error.message);
-    };
-
-    socket.on('proposalsUpdated', handleProposals);
-    socket.on('error', handleError);
+    // Listen for "proposals" events from the server
+    socket.on('proposals', handleProposals);
 
     return () => {
-      socket.off('proposalsUpdated', handleProposals);
-      socket.off('error', handleError);
+      // Cleanup the listener on unmount
+      socket.off('proposals', handleProposals);
     };
   }, []);
 
-  const handleApprove = (proposal: Proposal) => {
+  const handleApprove = (proposal: ExpenseProposal) => {
     console.log('[CLIENT] Approved proposal:', proposal);
   };
 
-  const handleReject = (proposal: Proposal) => {
+  const handleReject = (proposal: ExpenseProposal) => {
     console.log('[CLIENT] Rejected proposal:', proposal);
   };
 
@@ -582,7 +545,7 @@ export function AudioRecorder() {
       {transcriptions.map((text, index) => (
         <Text key={index}>{text}</Text>
       ))}
-      {proposals.length > 0 && (
+      {proposals?.length > 0 && (
         <ProposalsList proposals={proposals} onApprove={handleApprove} onReject={handleReject} />
       )}
     </Stack>

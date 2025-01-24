@@ -1,11 +1,11 @@
 import React from 'react';
 import { Stack, Text, Button } from '@mantine/core';
-import { Proposal } from '../types';
+import { ExpenseProposal } from '../types';
 
 interface ProposalsListProps {
-  proposals: Proposal[];
-  onApprove: (proposal: Proposal) => void;
-  onReject: (proposal: Proposal) => void;
+  proposals: ExpenseProposal[];
+  onApprove: (proposal: ExpenseProposal) => void;
+  onReject: (proposal: ExpenseProposal) => void;
 }
 
 export function ProposalsList({ proposals, onApprove, onReject }: ProposalsListProps) {
